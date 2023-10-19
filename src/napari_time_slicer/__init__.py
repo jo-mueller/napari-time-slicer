@@ -1,8 +1,6 @@
 
 __version__ = "0.4.9"
 
-from ._function import napari_experimental_provide_function
-
 import napari
 from toolz import curry
 from typing import Callable
@@ -12,7 +10,7 @@ import inspect
 import numpy as np
 import dask.array as da
 from dask import delayed
-
+from dask.distributed import Client, get_client
     
     
 # most imports here are just for backwards compatbility
@@ -60,14 +58,14 @@ def time_slicer(function: Callable) -> Callable:
             if "viewer" in kwargs.keys():
                 kwargs.pop("viewer")
 
-        #sig = inspect.signature(function)
-        # create mapping from position and keyword arguments to parameters
-        # will raise a TypeError if the provided arguments do not match the signature
-        # https://docs.python.org/3/library/inspect.html#inspect.Signature.bind
-        #bound = sig.bind(*args, **kwargs)
-        # set default values for missing arguments
-        # https://docs.python.org/3/library/inspect.html#inspect.BoundArguments.apply_defaults
-        #bound.apply_defaults()
+        # sig = inspect.signature(function)
+        # # create mapping from position and keyword arguments to parameters
+        # # will raise a TypeError if the provided arguments do not match the signature
+        # # https://docs.python.org/3/library/inspect.html#inspect.Signature.bind
+        # bound = sig.bind(*args, **kwargs)
+        # # set default values for missing arguments
+        # # https://docs.python.org/3/library/inspect.html#inspect.BoundArguments.apply_defaults
+        # bound.apply_defaults()
 
 
         if viewer is None:
@@ -84,36 +82,33 @@ def time_slicer(function: Callable) -> Callable:
                 # set up lazy processing
 
                 # make the dask stack
-                lazy_arrays = []
+                futures = []
+                try:
+                    client = get_client()
+                except ValueError:
+                    client = Client()
+                print(client.dashboard_link)
+
                 for i in range(viewer.dims.nsteps[0]):
                     # needs to be called everytime we want to change the bound args
-                    #bound = sig.bind(*args, **kwargs)
-                    #bound.apply_defaults()
-                    #_break_down_4d_to_2d_kwargs(bound.arguments, i, viewer)
-                    lazy_processed_image = delayed(
-                        partial(apply_function_to_timepoint, function, current_timepoint, args, kwargs))
+                    bound = sig.bind(*args, **kwargs)
+                    bound.apply_defaults()
+                    _break_down_4d_to_2d_kwargs(bound.arguments, i, viewer)
+                    
+                    future = client.submit(function, *bound.args[:-1], **bound.kwargs)
+                    futures.append(future)
 
-                    lazy_arrays.append(
-                        lazy_processed_image()
-                    )
-
+                results = da.compute(*futures)
                 dask_arrays = [
-                    [da.from_delayed(
-                        delayed_reader,
-                        shape=output_sample.shape,
-                        dtype=output_sample.dtype)]
-                    if len(output_sample.shape) == 2
-                    else da.from_delayed(
-                        delayed_reader,
-                        shape=output_sample.shape,
-                        dtype=output_sample.dtype
-                    )
-                    for delayed_reader in lazy_arrays
-                ]
+                    da.from_delayed(result, shape=output_sample.shape, dtype=int) for result in results]
                 # Stack into one large dask.array
                 stack = da.stack(
                     dask_arrays,
                     axis=0)
+                
+                # add singleton axxis if there were any in input
+                if len(stack.shape) < viewer.dims.ndim:
+                    stack = stack[:, None, :, :]
                 return stack
 
         # call the decorated function
