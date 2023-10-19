@@ -1,5 +1,5 @@
 
-__version__ = "0.4.5"
+__version__ = "0.4.9"
 
 from ._function import napari_experimental_provide_function
 
@@ -50,6 +50,11 @@ def time_slicer(function: Callable) -> Callable:
         for key, value in kwargs.items():
             if isinstance(value, napari.Viewer):
                 viewer = value
+        if viewer is None:
+            for value in args:
+                if isinstance(value, napari.Viewer):
+                    viewer = value
+                    break
 
         if not has_viewer_parameter:
             if "viewer" in kwargs.keys():
